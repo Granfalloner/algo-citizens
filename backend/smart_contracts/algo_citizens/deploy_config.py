@@ -39,4 +39,35 @@ def deploy(
     except:
         print('Call has failed')
         
+
+    from algosdk import transaction, encoding
+    from algosdk.atomic_transaction_composer import (
+        AtomicTransactionComposer,
+        AccountTransactionSigner,
+        TransactionWithSigner
     )
+
+
+    print(f'app sender: {deployer.address}, app id: {app_client.app_id}')
+    deployer = algokit_utils.get_account(algod_client, "DEPLOYER", fund_with_algos=0)
+
+    atc = AtomicTransactionComposer()
+    signer = AccountTransactionSigner(deployer.private_key)
+
+    emptyTxns = [
+        transaction.ApplicationNoOpTxn(deployer.address, algod_client.suggested_params(), app_client.app_id, [binascii.unhexlify('f7ca29da'), i])
+        for i in range(0, 7)
+    ]
+
+    pk = encoding.decode_address(address)
+    getVoteTxn = transaction.ApplicationNoOpTxn(deployer.address, algod_client.suggested_params(), app_client.app_id, [binascii.unhexlify('f2c07ee3'), pk, 1])
+    getVoteTxnWithSigner = TransactionWithSigner(getVoteTxn, signer)
+
+    atc.add_transaction(getVoteTxnWithSigner)
+    for txn in emptyTxns:
+        atc.add_transaction(TransactionWithSigner(txn, signer))
+
+    response = atc.execute(algod_client, 4)
+    print(f'Response: txn ids: {response.tx_ids}, results: {response.abi_results}')
+    for res in response.abi_results:
+        print(res.return_value)
