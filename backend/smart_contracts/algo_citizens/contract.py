@@ -3,7 +3,8 @@ import pyteal as pt
 from beaker.lib import storage
 import typing
 
-Asset_ID=pt.Int(1027)
+# Asset_ID=pt.Int(1027)
+MAX_VOTES = 10
 
 class Proposal(pt.abi.NamedTuple):
     id: pt.abi.Field[pt.abi.Uint64]
@@ -19,12 +20,12 @@ class User(pt.abi.NamedTuple):
     vote_count: pt.abi.Field[pt.abi.Uint64]
     vote_power: pt.abi.Field[pt.abi.Uint64]
     delegate: pt.abi.Field[pt.abi.Address]
+    delagated_vote_power: pt.abi.Field[pt.abi.Uint64]
     
 
 class Vote(pt.abi.NamedTuple):
-    proposalId: pt.abi.Field[pt.abi.Uint64]
-    voter: pt.abi.Field[pt.abi.Address]
-
+    votePower: pt.abi.Field[pt.abi.Uint64]
+    
     
 class AlgoState:
     proposal_counter = bk.GlobalStateValue(stack_type=pt.TealType.uint64, default=pt.Int(0))
@@ -77,16 +78,74 @@ def read_proposal(id: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
 
 @app.external
 # @app.external(authorize=bk.Authorize.holds_token(asset_id=Asset_ID))
+def register() -> pt.Expr:
+    user = User()
+    address = pt.abi.Address()
+    vote_count = pt.abi.Uint64()
+    vote_power = pt.abi.Uint64()
+    delegate = pt.abi.Address()
+    delegated_vote_power = pt.abi.Uint64()
+
+    return pt.Seq(
+        address.set(pt.Txn.sender()),
+        pt.Assert(app.state.users[address].exists() == pt.Int(0)),
+        vote_count.set(pt.Int(MAX_VOTES)),
+        vote_power.set(pt.Int(1)),
+        user.set(vote_count, vote_power, delegate, delegated_vote_power),
+        app.state.users[address].set(user)
+    )
+
+@app.external
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=Asset_ID))
+def delegate_vote_right(to_address: pt.abi.Address) -> pt.Expr:
+    to_user = User()
+    from_user = User()
+
+    return pt.Seq(
+        # both to and from users must be registered already
+        pt.Assert(app.state.users[to_address].exists()),
+        (from_address := pt.abi.Address()).set(pt.Txn.sender()),
+        pt.Assert(app.state.users[from_address].exists()),
+
+        # from_user needs to rewoke existing delegation first if any
+        app.state.users[from_address].store_into(from_user),
+        (from_delegate := pt.abi.Address()).set(from_user.delegate),
+        pt.Assert(from_delegate.get() == pt.Global.zero_address()),
+
+        # cannot delegate if voting has already started
+        app.state.users[to_address].store_into(to_user),
+        (from_vote_count := pt.abi.Uint64()).set(from_user.vote_count),
+        (to_vote_count := pt.abi.Uint64()).set(to_user.vote_count),
+        pt.Assert(from_vote_count.get() == pt.Int(MAX_VOTES)), # should we actually enable it?
+        pt.Assert(to_vote_count.get() == from_vote_count.get()),
+
+        # disable recursive delegation for now
+        (to_delegate := pt.abi.Address()).set(to_user.delegate),
+        pt.Assert(to_delegate.get() == pt.Global.zero_address()),
+
+        # update to_user
+        (from_vote_power := pt.abi.Uint64()).set(from_user.vote_power),
+        (to_vote_power := pt.abi.Uint64()).set(to_user.vote_power),
+        (to_delegated_vote_power := pt.abi.Uint64()).set(to_user.delagated_vote_power),
+        to_delegated_vote_power.set(to_delegated_vote_power.get() + from_vote_power.get()),
+        to_user.set(to_vote_count, to_vote_power, to_delegate, to_delegated_vote_power),
+        app.state.users[to_address].set(to_user) 
+    )
+
+@app.external
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=Asset_ID))
 def vote(proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
     vote = Vote()
     key = pt.abi.String()
     address = pt.abi.Address()
+    votePower = pt.abi.Uint64()
 
     return pt.Seq(
         key.set(pt.Sha256(pt.Concat(pt.Txn.sender(), pt.Itob(proposalId.get())))),
         pt.Assert(pt.Not(app.state.votes[key].exists())),
         address.set(pt.Txn.sender()),
-        vote.set(proposalId, address),
+        votePower.set(pt.Int(1)),
+        vote.set(votePower),
         app.state.votes[key].set(vote),
         app.state.votes[key].store_into(output)
     )
@@ -113,8 +172,8 @@ def get_vote_test(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output:
     data = pt.abi.String()
     return pt.Seq( 
         data.set(pt.Sha256(pt.Concat(address.get(), pt.Itob(proposalId.get())))),
-        output.set(hexlify(data))
-        # output.set(data)
+        # output.set(hexlify(data))
+        output.set(data)
     )
 
 @pt.Subroutine(pt.TealType.bytes)
