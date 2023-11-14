@@ -105,42 +105,44 @@ def delegate_vote_right(to_address: pt.abi.Address) -> pt.Expr:
     return pt.Seq(
         # both to and from users must be registered already
         (user_address := pt.abi.Address()).set(pt.Txn.sender()),
+        pt.Assert(to_address.get() != pt.Global.zero_address()),
         pt.Assert(app.state.users[user_address].exists()),
         pt.Assert(app.state.users[to_address].exists()),
 
-        # fetch users info
+        # fetch user info
         app.state.users[user_address].store_into(user),
-        app.state.users[to_address].store_into(delegate),
-
         (vote_count := pt.abi.Uint64()).set(user.vote_count),
         (vote_power := pt.abi.Uint64()).set(user.vote_power),
         (delegate_address := pt.abi.Address()).set(user.delegate),
         (entrusted_vote_power := pt.abi.Uint64()).set(user.entrusted_vote_power),
 
-        (delegate_vote_count := pt.abi.Uint64()).set(delegate.vote_count),
-        (delegate_vote_power := pt.abi.Uint64()).set(delegate.vote_power),
-        (delegate_of_delegate := pt.abi.Address()).set(delegate.delegate),
-        (delegate_entrusted_vote_power := pt.abi.Uint64()).set(delegate.entrusted_vote_power),
-
         # user needs to withdraw existing delegation first if any
         pt.Assert(delegate_address.get() == pt.Global.zero_address()),
 
-        # cannot delegate if voting has already started
+        # cannot delegate if has already voted
         pt.Assert(vote_count.get() == pt.Int(MAX_VOTES)),
-        pt.Assert(vote_count.get() == delegate_vote_count.get()),
-
-        # disable recursive delegation for now
-        pt.Assert(delegate_of_delegate.get() == pt.Global.zero_address()),
-
-        # update delegate
-        delegate_entrusted_vote_power.set(delegate_entrusted_vote_power.get() + vote_power.get() + entrusted_vote_power.get()),
-        delegate.set(delegate_vote_count, delegate_vote_power, delegate_of_delegate, delegate_entrusted_vote_power),
-        app.state.users[to_address].set(delegate),
         
         # update user
         delegate_address.set(to_address.get()),
         user.set(vote_count, vote_power, delegate_address, entrusted_vote_power),
-        app.state.users[user_address].set(user)
+        app.state.users[user_address].set(user),
+
+        pt.While(delegate_address.get() != pt.Global.zero_address()).Do(
+            # fetch delegate info
+            app.state.users[delegate_address].store_into(delegate),
+            (delegate_vote_count := pt.abi.Uint64()).set(delegate.vote_count),
+            (delegate_vote_power := pt.abi.Uint64()).set(delegate.vote_power),
+            delegate_address.set(delegate.delegate),
+            (delegate_entrusted_vote_power := pt.abi.Uint64()).set(delegate.entrusted_vote_power),
+
+            # cannot delegate if has already voted
+            pt.Assert(delegate_vote_count.get() == pt.Int(MAX_VOTES)),
+
+            # update delegate
+            delegate_entrusted_vote_power.set(delegate_entrusted_vote_power.get() + vote_power.get() + entrusted_vote_power.get()),
+            delegate.set(delegate_vote_count, delegate_vote_power, delegate_address, delegate_entrusted_vote_power),
+            app.state.users[delegate_address].set(delegate),
+        ),
     )
 
 @app.external
@@ -151,42 +153,37 @@ def withdraw_vote_right() -> pt.Expr:
 
     return pt.Seq(
         # check if from_user is registered
-        (address := pt.abi.Address()).set(pt.Txn.sender()),
-        pt.Assert(app.state.users[address].exists()),
+        (user_address := pt.abi.Address()).set(pt.Txn.sender()),
+        pt.Assert(app.state.users[user_address].exists()),
         
         # fetch user info
-        app.state.users[address].store_into(user),
+        app.state.users[user_address].store_into(user),
         (vote_count := pt.abi.Uint64()).set(user.vote_count),
         (vote_power := pt.abi.Uint64()).set(user.vote_power),
         (delegate_address := pt.abi.Address()).set(user.delegate),
         (entrusted_vote_power := pt.abi.Uint64()).set(user.entrusted_vote_power),
 
-        # check if delegate exists and registered
-        pt.Assert(delegate_address.get() != pt.Global.zero_address()),
-        pt.Assert(app.state.users[delegate_address].exists()),
-        
-        # fetch delegate info
-        app.state.users[delegate_address].store_into(delegate),
-        (delegate_vote_count := pt.abi.Uint64()).set(delegate.vote_count),
-        (delegate_vote_power := pt.abi.Uint64()).set(delegate.vote_power),
-        (delegate_of_delegate := pt.abi.Address()).set(delegate.delegate),
-        (delegate_entrusted_vote_power := pt.abi.Uint64()).set(delegate.entrusted_vote_power),
-        
-        # TODO: handle recursive delegation properly
-        pt.Assert(delegate_of_delegate.get() == pt.Global.zero_address()),
-
-        # cannot revoke if voting has already started
-        pt.Assert(delegate_vote_count.get() == pt.Int(MAX_VOTES)),
-
-        # update delegate
-        delegate_entrusted_vote_power.set(delegate_entrusted_vote_power.get() - vote_power.get() - entrusted_vote_power.get()),
-        delegate.set(delegate_vote_count, delegate_vote_power, delegate_of_delegate, delegate_entrusted_vote_power),
-        app.state.users[delegate_address].set(delegate),
-        
         # update user
-        delegate_address.set(pt.Global.zero_address()),
-        user.set(vote_count, vote_power, delegate_address, entrusted_vote_power),
-        app.state.users[address].set(user)
+        (zero_address := pt.abi.Address()).set(pt.Global.zero_address()),
+        user.set(vote_count, vote_power, zero_address, entrusted_vote_power),
+        app.state.users[user_address].set(user),
+
+        pt.While(delegate_address.get() != pt.Global.zero_address()).Do(
+            # fetch delegate info
+            app.state.users[delegate_address].store_into(delegate),
+            (delegate_vote_count := pt.abi.Uint64()).set(delegate.vote_count),
+            (delegate_vote_power := pt.abi.Uint64()).set(delegate.vote_power),
+            delegate_address.set(delegate.delegate),
+            (delegate_entrusted_vote_power := pt.abi.Uint64()).set(delegate.entrusted_vote_power),
+            
+            # cannot revoke if voting has already started
+            pt.Assert(delegate_vote_count.get() == pt.Int(MAX_VOTES)),
+
+            # update delegate
+            delegate_entrusted_vote_power.set(delegate_entrusted_vote_power.get() - vote_power.get() - entrusted_vote_power.get()),
+            delegate.set(delegate_vote_count, delegate_vote_power, delegate_address, delegate_entrusted_vote_power),
+            app.state.users[delegate_address].set(delegate),    
+        )
     )
 
 @app.external
