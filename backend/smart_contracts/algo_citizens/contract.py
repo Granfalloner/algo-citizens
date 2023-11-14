@@ -3,17 +3,19 @@ import pyteal as pt
 from beaker.lib import storage
 import typing
 
-# Asset_ID=pt.Int(1027)
-MAX_VOTES = 10
+# ASSET_ID=pt.Int(xxxx)
+# ADMIN_ASSET_ID=pt.Int(zzzz)
+MAX_VOTES = pt.Int(10)
 
 class Proposal(pt.abi.NamedTuple):
     id: pt.abi.Field[pt.abi.Uint64]
     name: pt.abi.Field[pt.abi.String]
     author: pt.abi.Field[pt.abi.String]
-    authorAddress: pt.abi.Field[pt.abi.Address]
+    author_address: pt.abi.Field[pt.abi.Address]
     description: pt.abi.Field[pt.abi.String]
-    isVotingActive: pt.abi.Field[pt.abi.Bool]
-    yesVotes: pt.abi.Field[pt.abi.Uint64]
+    total_vote_power: pt.abi.Field[pt.abi.Uint64]
+    is_voting_open: pt.abi.Field[pt.abi.Bool]
+    is_archived: pt.abi.Field[pt.abi.Bool]
 
 
 class User(pt.abi.NamedTuple):
@@ -24,7 +26,7 @@ class User(pt.abi.NamedTuple):
     
 
 class Vote(pt.abi.NamedTuple):
-    votePower: pt.abi.Field[pt.abi.Uint64]
+    vote_power: pt.abi.Field[pt.abi.Uint64]
     
     
 class AlgoState:
@@ -36,38 +38,24 @@ class AlgoState:
     
     votes = storage.BoxMapping(pt.abi.String, Vote)
 
+
 app = bk.Application("AlgoCitizens", state=AlgoState()) \
     .apply(bk.unconditional_create_approval, initialize_global_state=True)
 
 
-# @app.external
-# def testBox(name: pt.abi.String, value: pt.abi.String) -> pt.Expr:
-#     return pt.App.box_put(name=name.get(), value=value.get())
-
-# @app.external(read_only=True)
-# def readTestBox(name: pt.abi.String, *, output: pt.abi.String) -> pt.Expr:
-#     return pt.Seq(contents := pt.App.box_get(name.get()),
-#                   pt.Assert(contents.hasValue()),
-#                   output.set(contents.value()))
-
-
 @app.external
-# @app.external(authorize=bk.Authorize.holds_token(asset_id=Asset_ID))
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
 def add_proposal(id: pt.abi.Uint64, name: pt.abi.String, author: pt.abi.String, description: pt.abi.String, *, output: Proposal) -> pt.Expr:
-    authorAddress = pt.abi.Address()
-    isVotingActive = pt.abi.Bool()
-    yesVotes = pt.abi.Uint64()
-    noVotes = pt.abi.Uint64()
     proposal = Proposal()
 
     return pt.Seq(
-        pt.Assert(pt.Not(app.state.proposals[id].exists())),
+        pt.Assert(app.state.proposals[id].exists() == pt.Int(0)),
         app.state.proposal_counter.increment(),
-        authorAddress.set(pt.Txn.sender()),
-        isVotingActive.set(False),
-        yesVotes.set(0),
-        noVotes.set(0),
-        proposal.set(id, name, author, authorAddress, description, isVotingActive, yesVotes),
+        (authorAddress := pt.abi.Address()).set(pt.Txn.sender()),
+        (total_vote_power := pt.abi.Uint64()).set(pt.Int(0)),
+        (is_voting_open := pt.abi.Bool()).set(False),
+        (is_archived := pt.abi.Bool()).set(False),
+        proposal.set(id, name, author, authorAddress, description, total_vote_power, is_voting_open, is_archived),
         app.state.proposals[id].set(proposal),
         app.state.proposals[id].store_into(output)
     )
@@ -77,27 +65,28 @@ def read_proposal(id: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
     return app.state.proposals[id].store_into(output)
 
 @app.external
-# @app.external(authorize=bk.Authorize.holds_token(asset_id=Asset_ID))
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
 def register() -> pt.Expr:
     user = User()
-    address = pt.abi.Address()
-    vote_count = pt.abi.Uint64()
-    vote_power = pt.abi.Uint64()
-    delegate = pt.abi.Address()
-    delegated_vote_power = pt.abi.Uint64()
 
     return pt.Seq(
-        address.set(pt.Txn.sender()),
+        # check user is not yet registered
+        (address := pt.abi.Address()).set(pt.Txn.sender()),
         pt.Assert(app.state.users[address].exists() == pt.Int(0)),
-        vote_count.set(pt.Int(MAX_VOTES)),
-        vote_power.set(pt.Int(1)),
-        delegate.set(pt.Global.zero_address()),
-        user.set(vote_count, vote_power, delegate, delegated_vote_power),
+
+        # set defaults
+        (vote_count := pt.abi.Uint64()).set(MAX_VOTES),
+        (vote_power := pt.abi.Uint64()).set(pt.Int(1)),
+        (delegate_address := pt.abi.Address()).set(pt.Global.zero_address()),
+        (entrusted_vote_power := pt.abi.Uint64()).set(pt.Int(0)),
+
+        # store user info
+        user.set(vote_count, vote_power, delegate_address, entrusted_vote_power),
         app.state.users[address].set(user)
     )
 
 @app.external
-# @app.external(authorize=bk.Authorize.holds_token(asset_id=Asset_ID))
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
 def delegate_vote_right(to_address: pt.abi.Address) -> pt.Expr:
     user = User()
     delegate = User()
@@ -120,7 +109,7 @@ def delegate_vote_right(to_address: pt.abi.Address) -> pt.Expr:
         pt.Assert(delegate_address.get() == pt.Global.zero_address()),
 
         # cannot delegate if has already voted
-        pt.Assert(vote_count.get() == pt.Int(MAX_VOTES)),
+        pt.Assert(vote_count.get() == MAX_VOTES),
         
         # update user
         delegate_address.set(to_address.get()),
@@ -136,7 +125,7 @@ def delegate_vote_right(to_address: pt.abi.Address) -> pt.Expr:
             (delegate_entrusted_vote_power := pt.abi.Uint64()).set(delegate.entrusted_vote_power),
 
             # cannot delegate if has already voted
-            pt.Assert(delegate_vote_count.get() == pt.Int(MAX_VOTES)),
+            pt.Assert(delegate_vote_count.get() == MAX_VOTES),
 
             # update delegate
             delegate_entrusted_vote_power.set(delegate_entrusted_vote_power.get() + vote_power.get() + entrusted_vote_power.get()),
@@ -146,7 +135,7 @@ def delegate_vote_right(to_address: pt.abi.Address) -> pt.Expr:
     )
 
 @app.external
-# @app.external(authorize=bk.Authorize.holds_token(asset_id=Asset_ID))
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
 def withdraw_vote_right() -> pt.Expr:
     user = User()
     delegate = User()
@@ -177,7 +166,7 @@ def withdraw_vote_right() -> pt.Expr:
             (delegate_entrusted_vote_power := pt.abi.Uint64()).set(delegate.entrusted_vote_power),
             
             # cannot revoke if voting has already started
-            pt.Assert(delegate_vote_count.get() == pt.Int(MAX_VOTES)),
+            pt.Assert(delegate_vote_count.get() == MAX_VOTES),
 
             # update delegate
             delegate_entrusted_vote_power.set(delegate_entrusted_vote_power.get() - vote_power.get() - entrusted_vote_power.get()),
@@ -187,7 +176,7 @@ def withdraw_vote_right() -> pt.Expr:
     )
 
 @app.external
-# @app.external(authorize=bk.Authorize.holds_token(asset_id=Asset_ID))
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
 def vote(proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
     vote = Vote()
     key = pt.abi.String()
@@ -206,7 +195,7 @@ def vote(proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
 
 
 @app.external(read_only=True)
-# @app.external(authorize=bk.Authorize.holds_token(asset_id=Asset_ID))
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
 def get_vote(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
     key = pt.abi.String()
 
@@ -216,18 +205,18 @@ def get_vote(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output: Prop
         app.state.votes[key].store_into(output)
     )
     
-@app.external
+@app.external(read_only=True)
 def empty(*, output: pt.abi.Uint8) -> pt.Expr:
     return output.set(pt.Int(1))
     
-@app.external
-# @app.external(authorize=bk.Authorize.holds_token(asset_id=Asset_ID))
-def get_vote_test(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output: pt.abi.String) -> pt.Expr:
-    data = pt.abi.String()
+@app.external(read_only=True)
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
+def get_vote_box_key(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output: pt.abi.String) -> pt.Expr:
+    key = pt.abi.String()
     return pt.Seq( 
-        data.set(pt.Sha256(pt.Concat(address.get(), pt.Itob(proposalId.get())))),
+        key.set(pt.Sha256(pt.Concat(address.get(), pt.Itob(proposalId.get())))),
         # output.set(hexlify(data))
-        output.set(data)
+        output.set(key)
     )
 
 @pt.Subroutine(pt.TealType.bytes)

@@ -31,7 +31,7 @@ def deploy(
 
     address = "AM6VLI34GB7CUDQFTLSQT7G6NNKKJMPTS3V5GVWTHFCRV332AJS5BFMBYQ"
     try:
-        response = app_client.get_vote_test(address=address, proposalId=1)
+        response = app_client.get_vote_box_key(address=address, proposalId=1)
         logger.info(
             f"Called get_vote_test on {app_spec.contract.name} ({app_client.app_id}) "
             f"with name={address}, proposalId {1}, tx_id: {response.tx_id}, response: {binascii.hexlify(response.raw_value)}, result: {response.return_value}"
@@ -60,7 +60,7 @@ def deploy(
     ]
 
     pk = encoding.decode_address(address)
-    getVoteTxn = transaction.ApplicationNoOpTxn(deployer.address, algod_client.suggested_params(), app_client.app_id, [binascii.unhexlify('f2c07ee3'), pk, 1])
+    getVoteTxn = transaction.ApplicationNoOpTxn(deployer.address, algod_client.suggested_params(), app_client.app_id, [binascii.unhexlify('1b1c9411'), pk, 1])
     getVoteTxnWithSigner = TransactionWithSigner(getVoteTxn, signer)
 
     atc.add_transaction(getVoteTxnWithSigner)
