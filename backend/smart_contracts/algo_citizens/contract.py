@@ -14,7 +14,6 @@ class Proposal(pt.abi.NamedTuple):
     author_address: pt.abi.Field[pt.abi.Address]
     description: pt.abi.Field[pt.abi.String]
     total_vote_power: pt.abi.Field[pt.abi.Uint64]
-    is_voting_open: pt.abi.Field[pt.abi.Bool]
     is_archived: pt.abi.Field[pt.abi.Bool]
 
 
@@ -30,12 +29,14 @@ class Vote(pt.abi.NamedTuple):
     
     
 class AlgoState:
-    proposal_counter = bk.GlobalStateValue(stack_type=pt.TealType.uint64, default=pt.Int(0))
+    active_proposal_count = bk.GlobalStateValue(stack_type=pt.TealType.uint64, default=pt.Int(0))
+    total_proposal_count = bk.GlobalStateValue(stack_type=pt.TealType.uint64, default=pt.Int(0))
     proposals = storage.BoxMapping(pt.abi.Uint64, Proposal)
 
-    user_counter = bk.GlobalStateValue(stack_type=pt.TealType.uint64, default=pt.Int(0))
+    user_count = bk.GlobalStateValue(stack_type=pt.TealType.uint64, default=pt.Int(0))
     users = storage.BoxMapping(pt.abi.Address, User)
     
+    is_voting_open = bk.GlobalStateValue(stack_type=pt.TealType.uint64, default=pt.Int(0))
     votes = storage.BoxMapping(pt.abi.String, Vote)
 
 
@@ -50,15 +51,39 @@ def add_proposal(id: pt.abi.Uint64, name: pt.abi.String, author: pt.abi.String, 
 
     return pt.Seq(
         pt.Assert(app.state.proposals[id].exists() == pt.Int(0)),
-        app.state.proposal_counter.increment(),
-        (authorAddress := pt.abi.Address()).set(pt.Txn.sender()),
+        app.state.active_proposal_count.increment(),
+        app.state.total_proposal_count.increment(),
+
+        (author_address := pt.abi.Address()).set(pt.Txn.sender()),
         (total_vote_power := pt.abi.Uint64()).set(pt.Int(0)),
-        (is_voting_open := pt.abi.Bool()).set(False),
         (is_archived := pt.abi.Bool()).set(False),
-        proposal.set(id, name, author, authorAddress, description, total_vote_power, is_voting_open, is_archived),
+
+        proposal.set(id, name, author, author_address, description, total_vote_power, is_archived),
         app.state.proposals[id].set(proposal),
         app.state.proposals[id].store_into(output)
     )
+
+@app.external
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=ADMIN_ASSET_ID))
+def archive_proposal(id: pt.abi.Uint64) -> pt.Expr:
+    proposal = Proposal()
+
+    return pt.Seq(
+        pt.Assert(app.state.proposals[id].exists()),
+        app.state.active_proposal_count.decrement(),
+        app.state.proposals[id].store_into(proposal),
+
+        (name := pt.abi.String()).set(proposal.name),
+        (author := pt.abi.String()).set(proposal.author),
+        (author_address := pt.abi.Address()).set(proposal.author_address),
+        (description := pt.abi.String()).set(proposal.description),
+        (total_vote_power := pt.abi.Uint64()).set(proposal.total_vote_power),
+        (is_archived := pt.abi.Bool()).set(True),
+
+        proposal.set(id, name, author, author_address, description, total_vote_power, is_archived),
+        app.state.proposals[id].set(proposal),
+    )
+
 
 @app.external(read_only=True)
 def read_proposal(id: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
@@ -73,6 +98,7 @@ def register() -> pt.Expr:
         # check user is not yet registered
         (address := pt.abi.Address()).set(pt.Txn.sender()),
         pt.Assert(app.state.users[address].exists() == pt.Int(0)),
+        app.state.user_count.increment(),
 
         # set defaults
         (vote_count := pt.abi.Uint64()).set(MAX_VOTES),
@@ -195,7 +221,6 @@ def vote(proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
 
 
 @app.external(read_only=True)
-# @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
 def get_vote(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
     key = pt.abi.String()
 
@@ -210,7 +235,6 @@ def empty(*, output: pt.abi.Uint8) -> pt.Expr:
     return output.set(pt.Int(1))
     
 @app.external(read_only=True)
-# @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
 def get_vote_box_key(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output: pt.abi.String) -> pt.Expr:
     key = pt.abi.String()
     return pt.Seq( 
