@@ -113,7 +113,7 @@ def register() -> pt.Expr:
 
 @app.external
 # @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
-def delegate_vote_right(to_address: pt.abi.Address) -> pt.Expr:
+def delegate_voting_right(to_address: pt.abi.Address) -> pt.Expr:
     user = User()
     delegate = User()
 
@@ -162,7 +162,7 @@ def delegate_vote_right(to_address: pt.abi.Address) -> pt.Expr:
 
 @app.external
 # @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
-def withdraw_vote_right() -> pt.Expr:
+def withdraw_voting_right() -> pt.Expr:
     user = User()
     delegate = User()
 
@@ -191,7 +191,7 @@ def withdraw_vote_right() -> pt.Expr:
             delegate_address.set(delegate.delegate),
             (delegate_entrusted_vote_power := pt.abi.Uint64()).set(delegate.entrusted_vote_power),
             
-            # cannot revoke if voting has already started
+            # cannot revoke if has already voted
             pt.Assert(delegate_vote_count.get() == MAX_VOTES),
 
             # update delegate
@@ -202,21 +202,80 @@ def withdraw_vote_right() -> pt.Expr:
     )
 
 @app.external
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=ADMIN_ASSET_ID))
+def open_voting() -> pt.Expr:
+    return pt.Seq(
+        pt.Assert(pt.Not(app.state.is_voting_open)),
+        app.state.is_voting_open.set(pt.Int(1))
+    )
+
+@app.external
+# @app.external(authorize=bk.Authorize.holds_token(asset_id=ADMIN_ASSET_ID))
+def close_voting() -> pt.Expr:
+    return pt.Seq(
+        pt.Assert(app.state.is_voting_open),
+        app.state.is_voting_open.set(pt.Int(0))
+    )
+
+@app.external
 # @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
 def vote(proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
+    user = User()
     vote = Vote()
-    key = pt.abi.String()
-    address = pt.abi.Address()
-    votePower = pt.abi.Uint64()
+    proposal = Proposal()
+    vote_key = pt.abi.String()
 
     return pt.Seq(
-        key.set(pt.Sha256(pt.Concat(pt.Txn.sender(), pt.Itob(proposalId.get())))),
-        pt.Assert(pt.Not(app.state.votes[key].exists())),
-        address.set(pt.Txn.sender()),
-        votePower.set(pt.Int(1)),
-        vote.set(votePower),
-        app.state.votes[key].set(vote),
-        app.state.votes[key].store_into(output)
+        # check if voting is open
+        pt.Assert(app.state.is_voting_open),
+
+        # fetch user info
+        (address := pt.abi.Address()).set(pt.Txn.sender()),
+        app.state.users[address].store_into(user),
+
+        (vote_count := pt.abi.Uint64()).set(user.vote_count),
+        (vote_power := pt.abi.Uint64()).set(user.vote_power),
+        (delegate_address := pt.abi.Address()).set(user.delegate),
+        (entrusted_vote_power := pt.abi.Uint64()).set(user.entrusted_vote_power),
+        
+        # check if user has not delegated his voting right
+        pt.Assert(delegate_address.get() == pt.Global.zero_address()),
+
+        # check if user has remaining votes
+        pt.Assert(vote_count.get() > pt.Int(0)),
+        
+        # check if not voted before for this proposal
+        vote_key.set(pt.Sha256(pt.Concat(pt.Txn.sender(), pt.Itob(proposalId.get())))),
+        pt.Assert(app.state.votes[vote_key].exists() == pt.Int(0)),
+
+        # check if proposal exists and not archived, fetch its info
+        pt.Assert(app.state.proposals[proposalId].exists()),
+        app.state.proposals[proposalId].store_into(proposal),
+
+        (name := pt.abi.String()).set(proposal.name),
+        (author := pt.abi.String()).set(proposal.author),
+        (author_address := pt.abi.Address()).set(proposal.author_address),
+        (description := pt.abi.String()).set(proposal.description),
+        (total_vote_power := pt.abi.Uint64()).set(proposal.total_vote_power),
+        (is_archived := pt.abi.Bool()).set(True),
+
+        pt.Assert(pt.Not(is_archived.get())),
+        
+        # update proposal
+        total_vote_power.set(total_vote_power.get() + vote_power.get() + entrusted_vote_power.get()),
+        proposal.set(proposalId, name, author, author_address, description, total_vote_power, is_archived),
+        app.state.proposals[proposalId].set(proposal),
+
+        # update user
+        vote_count.set(vote_count.get() - pt.Int(1)),
+        user.set(vote_count, vote_power, delegate_address, entrusted_vote_power),
+        app.state.users[address].set(user),
+
+        # update vote
+        (power := pt.abi.Uint64()).set(vote_power.get() + entrusted_vote_power.get()),
+        vote.set(power),
+        app.state.votes[vote_key].set(vote),
+        app.state.votes[vote_key].store_into(output)
     )
 
 
@@ -248,21 +307,18 @@ def hexlify(data: pt.abi.String) -> pt.Expr:
     result = pt.abi.String()
     i = pt.ScratchVar(pt.TealType.uint64)
     byte = pt.abi.Byte()
-    byteAsString = pt.abi.String()
-    high = pt.abi.Uint8()
-    low = pt.abi.Uint8()
+    byte_as_string = pt.abi.String()
+    high_nibble = pt.abi.Uint8()
+    low_nibble = pt.abi.Uint8()
 
-    # pt.Len(data.get())
     return pt.Seq(
         result.set(''),
         pt.For(i.store(pt.Int(0)), i.load() < pt.Len(data.get()), i.store(i.load() + pt.Int(1))).Do(
-            pt.Seq(
-                byte.set(pt.GetByte(data.get(), i.load())),
-                high.set(pt.Div(byte.get(), pt.Int(16))),
-                low.set(pt.Mod(byte.get(), pt.Int(16))),
-                byteAsString.set(pt.Concat(to_hex(high), to_hex(low))),
-                result.set(pt.Concat(result.get(), byteAsString.get()))
-            )
+            byte.set(pt.GetByte(data.get(), i.load())),
+            high_nibble.set(pt.Div(byte.get(), pt.Int(16))),
+            low_nibble.set(pt.Mod(byte.get(), pt.Int(16))),
+            byte_as_string.set(pt.Concat(to_hex(high_nibble), to_hex(low_nibble))),
+            result.set(pt.Concat(result.get(), byte_as_string.get()))
         ),
         result.get()
     )
