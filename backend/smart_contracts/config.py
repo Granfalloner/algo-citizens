@@ -13,7 +13,10 @@ from beaker import Application
 class SmartContract:
     app: Application
     deploy: Callable[
-        [AlgodClient, IndexerClient, ApplicationSpecification, Account], None
+        [AlgodClient, IndexerClient, ApplicationSpecification, Account], int
+    ] | None = None
+    test: Callable[
+        [AlgodClient, IndexerClient, ApplicationSpecification, Account], int
     ] | None = None
 
 
@@ -31,7 +34,7 @@ def import_contract(folder: Path) -> Application:
 def import_deploy_if_exists(
     folder: Path,
 ) -> (
-    Callable[[AlgodClient, IndexerClient, ApplicationSpecification, Account], None]
+    Callable[[AlgodClient, IndexerClient, ApplicationSpecification, Account], int]
     | None
 ):
     """Imports the deploy function from a folder if it exists."""
@@ -43,6 +46,20 @@ def import_deploy_if_exists(
     except ImportError:
         return None
 
+def import_test_if_exists(
+    folder: Path,
+) -> (
+    Callable[[AlgodClient, IndexerClient, ApplicationSpecification, Account], int]
+    | None
+):
+    """Imports the test function from a folder if it exists."""
+    try:
+        test_module = importlib.import_module(
+            f"{folder.parent.name}.{folder.name}.test_config"
+        )
+        return test_module.test
+    except ImportError:
+        return None
 
 def has_contract_file(directory: Path) -> bool:
     """Checks whether the directory contains contract.py file."""
@@ -52,7 +69,7 @@ def has_contract_file(directory: Path) -> bool:
 # define contracts to build and/or deploy
 base_dir = Path("smart_contracts")
 contracts = [
-    SmartContract(app=import_contract(folder), deploy=import_deploy_if_exists(folder))
+    SmartContract(app=import_contract(folder), deploy=import_deploy_if_exists(folder), test=import_test_if_exists(folder))
     for folder in base_dir.iterdir()
     if folder.is_dir() and has_contract_file(folder)
 ]

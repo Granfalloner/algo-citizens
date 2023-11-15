@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from smart_contracts.config import contracts
 from smart_contracts.helpers.build import build
 from smart_contracts.helpers.deploy import deploy
+from smart_contracts.helpers.test import test
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s %(levelname)-10s: %(message)s"
@@ -19,17 +20,30 @@ root_path = Path(__file__).parent
 
 def main(action: str) -> None:
     artifact_path = root_path / "artifacts"
+
     match action:
         case "build":
             for contract in contracts:
                 logger.info(f"Building app {contract.app.name}")
                 build(artifact_path / contract.app.name, contract.app)
+
         case "deploy":
             for contract in contracts:
                 logger.info(f"Deploying app {contract.app.name}")
                 app_spec_path = artifact_path / contract.app.name / "application.json"
                 if contract.deploy:
                     deploy(app_spec_path, contract.deploy)
+                    
+        case "test":
+            for contract in contracts:
+                app_spec_path = artifact_path / contract.app.name / "application.json"
+                if contract.deploy:
+                    logger.info(f"Deploying app {contract.app.name}")
+                    app_id = deploy(app_spec_path, contract.deploy)
+                    if contract.test:
+                        logger.info(f"Testing app {contract.app.name}")
+                        test(app_spec_path, contract.test, app_id)
+            
         case "all":
             for contract in contracts:
                 logger.info(f"Building app {contract.app.name}")
