@@ -1,10 +1,9 @@
 import beaker as bk
 import pyteal as pt
 from beaker.lib import storage
-import typing
 
-# ASSET_ID=pt.Int(xxxx)
-# ADMIN_ASSET_ID=pt.Int(zzzz)
+# ASSET_ID=pt.Int(12345)
+# ADMIN_ASSET_ID=pt.Int(67890)
 MAX_VOTES = pt.Int(10)
 
 class Proposal(pt.abi.NamedTuple):
@@ -43,6 +42,7 @@ class AlgoState:
 app = bk.Application("AlgoCitizens", state=AlgoState()) \
     .apply(bk.unconditional_create_approval, initialize_global_state=True)
 
+# ---------------------------------------- Proposals ----------------------------------------
 
 @app.external
 # @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
@@ -86,12 +86,26 @@ def archive_proposal(id: pt.abi.Uint64) -> pt.Expr:
 
 
 @app.external(read_only=True)
+def proposal_exists(id: pt.abi.Uint64, *, output: pt.abi.Bool) -> pt.Expr:
+    return output.set(app.state.proposals[id].exists())
+
+@app.external(read_only=True)
 def read_proposal(id: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
     return app.state.proposals[id].store_into(output)
 
+# ---------------------------------------- Users ----------------------------------------
+
+@app.external(read_only=True)
+def is_registered(address: pt.abi.Address, *, output: pt.abi.Bool) -> pt.Expr:
+    return output.set(app.state.users[address].exists())
+
+@app.external(read_only=True)
+def read_user(address: pt.abi.Address, *, output: User) -> pt.Expr:
+    return app.state.users[address].store_into(output)
+
 @app.external
 # @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
-def register() -> pt.Expr:
+def register(*, output: User) -> pt.Expr:
     user = User()
 
     return pt.Seq(
@@ -108,7 +122,8 @@ def register() -> pt.Expr:
 
         # store user info
         user.set(vote_count, vote_power, delegate_address, entrusted_vote_power),
-        app.state.users[address].set(user)
+        app.state.users[address].set(user),
+        app.state.users[address].store_into(output)
     )
 
 @app.external
@@ -142,6 +157,7 @@ def delegate_voting_right(to_address: pt.abi.Address) -> pt.Expr:
         user.set(vote_count, vote_power, delegate_address, entrusted_vote_power),
         app.state.users[user_address].set(user),
 
+        # recursivly update whole delegate chain with increased voting power
         pt.While(delegate_address.get() != pt.Global.zero_address()).Do(
             # fetch delegate info
             app.state.users[delegate_address].store_into(delegate),
@@ -183,6 +199,7 @@ def withdraw_voting_right() -> pt.Expr:
         user.set(vote_count, vote_power, zero_address, entrusted_vote_power),
         app.state.users[user_address].set(user),
 
+        # recursivly update whole delegate chain with decreased voting power
         pt.While(delegate_address.get() != pt.Global.zero_address()).Do(
             # fetch delegate info
             app.state.users[delegate_address].store_into(delegate),
@@ -200,6 +217,12 @@ def withdraw_voting_right() -> pt.Expr:
             app.state.users[delegate_address].set(delegate),    
         )
     )
+
+# ---------------------------------------- Voting ----------------------------------------
+
+@app.external(read_only=True)
+def is_voting_open(*, output: pt.abi.Bool) -> pt.Expr:
+    return output.set(app.state.is_voting_open.get())
 
 @app.external
 # @app.external(authorize=bk.Authorize.holds_token(asset_id=ADMIN_ASSET_ID))
@@ -219,7 +242,7 @@ def close_voting() -> pt.Expr:
 
 @app.external
 # @app.external(authorize=bk.Authorize.holds_token(asset_id=ASSET_ID))
-def vote(proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
+def vote(proposalId: pt.abi.Uint64, *, output: Vote) -> pt.Expr:
     user = User()
     vote = Vote()
     proposal = Proposal()
@@ -257,7 +280,7 @@ def vote(proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
         (author_address := pt.abi.Address()).set(proposal.author_address),
         (description := pt.abi.String()).set(proposal.description),
         (total_vote_power := pt.abi.Uint64()).set(proposal.total_vote_power),
-        (is_archived := pt.abi.Bool()).set(True),
+        (is_archived := pt.abi.Bool()).set(False),
 
         pt.Assert(pt.Not(is_archived.get())),
         
@@ -278,20 +301,26 @@ def vote(proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
         app.state.votes[vote_key].store_into(output)
     )
 
-
 @app.external(read_only=True)
-def get_vote(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output: Proposal) -> pt.Expr:
+def has_voted(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output: pt.abi.Bool) -> pt.Expr:
     key = pt.abi.String()
 
     return pt.Seq(
-        key.set(pt.Sha256(pt.Concat(pt.Txn.sender(), pt.Itob(proposalId.get())))),
+        key.set(pt.Sha256(pt.Concat(address.get(), pt.Itob(proposalId.get())))),
+        output.set(app.state.votes[key].exists())   
+    )
+
+@app.external(read_only=True)
+def read_vote(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output: Vote) -> pt.Expr:
+    key = pt.abi.String()
+
+    return pt.Seq(
+        key.set(pt.Sha256(pt.Concat(address.get(), pt.Itob(proposalId.get())))),
         pt.Assert(app.state.votes[key].exists()),
         app.state.votes[key].store_into(output)
     )
-    
-@app.external(read_only=True)
-def empty(*, output: pt.abi.Uint8) -> pt.Expr:
-    return output.set(pt.Int(1))
+
+# ---------------------------------------- Utils ----------------------------------------
     
 @app.external(read_only=True)
 def get_vote_box_key(address: pt.abi.Address, proposalId: pt.abi.Uint64, *, output: pt.abi.String) -> pt.Expr:
