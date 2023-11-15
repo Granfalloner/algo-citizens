@@ -1,6 +1,43 @@
-# algo_citizens
+# AlgoCitizens
 
-This starter full stack project has been generated using AlgoKit. See below for default getting started instructions.
+AlgoCitizens is a participatory budgeting platform for citizens to submit, discuss and vote for local initiatives.
+
+# Important Links
+
+Smart contract deployed on the testnet:
+ - address [NAZLP5NI5FU5WJBT32R75VWPSD2UPDBII7C6GGCQA6BF7R6KHEDAYX3RXI](https://testnet.algoexplorer.io/address/NAZLP5NI5FU5WJBT32R75VWPSD2UPDBII7C6GGCQA6BF7R6KHEDAYX3RXI)
+ - app ID [479755206](https://testnet.algoexplorer.io/application/479755206)
+
+# Description
+## 1. Problem:
+
+There is a great tool in modern democracy such as a participatory budgeting. It is a form of citizen participation in which citizens are involved in the process of deciding how public money is spent. For example, only the NY City participatory budgeting is ~ $40 mln ($1 mln per district). And ppl can submit their idea and decide on how this money should be spent. However, there are some issues that make this process complex, unclear and not that transparent.
+![Problems and sulutions](https://cdn.dorahacks.io/static/files/18bcfce98c08a33eb41bd44403092d36.png)
+
+
+## 2. Solution:
+
+We designed AlgoCitizines, a platform that helps citizens to submit, discuss and vote (or delegate) for initiatives of participatory budgeting and get their proposals self-executed and funded. Also, users can earn city tokens based on their activities (proposals, discussions, votes) which they can exchange on city products and services.
+
+
+## 3. Key features:
+
+**Token-gated access:** only user with Residence Permit Token (RPT) will be able to submit/vote at the platform. *Disabled on testnet.*
+
+**Submit and discuss proposals.** Once user created their proposal they should sign tx to "submit" it on Algorand blockchain and then discuss it before voting epoch will be started.
+
+**Each user will get limited #of votes per Epoch** (voting period in participatory budgeting, ~2 months), so that they can choose most relevant for their district proposals.
+
+**User has voting power.** It works as a multiplier and increased through: voting (winner proposal); submitting proposal (winner proposal); meaningful discussion (appreciated by community).
+
+**User can delegate their votes(10 out of 10).** Receiver will get entrusted_vote_power, and can use only one delegated vote for each proposal. Also, we added in the smart contract possibility to withdraw your delegation.
+
+**User receives proof-of-voting badge (NFT)**, with clawback fx to prevent malicious behavior. *WIP.*
+
+**Killer feature: Exchange city tokens on a city transport card.** Based on users activities and contribution, they will get city tokens which they can exchange on city products and services. *WIP.*
+
+![Perks](https://cdn.dorahacks.io/static/files/18bcff0e91b7abd35def5cf447a8a3be.png)
+
 
 ## Setup
 
